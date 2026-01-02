@@ -25,7 +25,9 @@
 - Combine **pixel-art UI** with a **functional terminal**
 - Run inside an emulator (QEMU)
 
+---
 ⚠️ *Not meant for production use. This is a learning OS. But Who knows the Future...*
+---
 ⚠️*This is not a linux Distro and I haven't used any C++ or C library, every Library for RetroPixelOS is solely writtern and hard-coded*
 ---
 
