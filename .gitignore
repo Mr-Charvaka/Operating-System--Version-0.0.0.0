@@ -1,0 +1,14 @@
+*.o
+*.bin
+*.img
+*.elf
+node_modules/
+.DS_Store
+build/
+bin/
+# Visual Studio Code
+.vscode/
+# Temporary files
+tmp/
+*.tmp
+*.log
