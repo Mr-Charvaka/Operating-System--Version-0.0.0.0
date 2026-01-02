@@ -96,7 +96,11 @@ qemu-system-i386 -drive format=raw,file=os.img -serial stdio -m 512
 ```
 
 ---
+**Demo:**
 
+![sample view ](https://prnt.sc/A0eP73HOOTGY)
+
+---
 ## 🎮 Terminal Commands
 
 ```bash
