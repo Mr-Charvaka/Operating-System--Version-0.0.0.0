@@ -33,6 +33,7 @@ uint32_t load_elf(const char *filename, uint32_t *top_address) {
 
   serial_log("ELF: Valid Magic found.");
   serial_log_hex("ELF: Entry Point: ", ehdr->e_entry);
+  uint32_t entry_point = ehdr->e_entry;
 
   uint32_t max_addr = 0;
 
@@ -60,8 +61,6 @@ uint32_t load_elf(const char *filename, uint32_t *top_address) {
         if (vm_get_phys(page) == 0) {
           // Allocate new frame and map it
           // User Mode | RW | Present = 7
-          // Optimization: We could zero it here, but memcpy will overwrite.
-          // BSS needs zeroing though, handled below.
           vm_map_page((uint32_t)pmm_alloc_block(), page, 7);
         }
       }
@@ -84,5 +83,6 @@ uint32_t load_elf(const char *filename, uint32_t *top_address) {
   }
 
   kfree(buffer); // Clean up
-  return ehdr->e_entry;
+  serial_log_hex("ELF: Returning entry point ", entry_point);
+  return entry_point;
 }
