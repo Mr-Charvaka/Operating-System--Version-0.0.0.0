@@ -10,9 +10,19 @@ uint32_t tick = 0;
 
 static void timer_callback(registers_t *regs) {
   tick++;
-  if ((tick % 100) == 0) {
-    // serial_log("TIMER TICK");
+
+  // Wake up sleeping processes
+  process_t *p = ready_queue;
+  if (p) {
+    process_t *start = p;
+    do {
+      if (p->state == PROCESS_SLEEPING && tick >= p->sleep_until) {
+        p->state = PROCESS_READY;
+      }
+      p = p->next;
+    } while (p && p != start);
   }
+
   schedule();
 }
 

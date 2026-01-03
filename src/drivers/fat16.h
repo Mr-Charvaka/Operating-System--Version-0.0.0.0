@@ -53,7 +53,7 @@ typedef struct {
 #define ATTR_ARCHIVE 0x20
 #define ATTR_LFN 0x0F
 
-#include "vfs.h"
+#include "../include/vfs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,6 +64,11 @@ void fat16_list_root();
 void fat16_create_test_file();
 fat16_entry_t fat16_find_file(const char *filename);
 void fat16_read_file(fat16_entry_t *entry, uint8_t *buffer);
+int fat16_create_file(const char *filename);
+int fat16_write_file(const char *filename, uint8_t *data, uint32_t size);
+int fat16_delete_file(const char *filename);
+int fat16_mkdir(const char *name);
+void fat16_get_stats_bytes(uint32_t *total, uint32_t *free);
 
 vfs_node_t *fat16_vfs_init();
 vfs_node_t *devfs_init();

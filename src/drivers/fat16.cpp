@@ -1,10 +1,12 @@
 #include "fat16.h"
+#include "../include/dirent.h"
 #include "../include/string.h"
 #include "../include/vfs.h"
 #include "../kernel/heap.h"
 #include "../kernel/memory.h"
 #include "ata.h"
 #include "serial.h"
+
 
 // Forward declaration for DevFS
 extern "C" vfs_node_t *devfs_init();
@@ -59,31 +61,55 @@ void fat16_list_root() {
 
 fat16_entry_t fat16_find_file(const char *filename) {
   uint8_t buffer[512];
-  // Simplification: only search first sector of root dir
-  ata_read_sector(root_dir_start_sector, buffer);
-  fat16_entry_t *entries = (fat16_entry_t *)buffer;
+  uint32_t root_dir_sectors = (bpb.root_entries_count * 32 + 511) / 512;
 
-  for (int i = 0; i < 16; i++) {
-    if (entries[i].filename[0] == 0)
-      break;
+  serial_log("FAT16: Searching for file:");
+  serial_log(filename);
 
-    char name[13];
-    int k = 0;
-    for (int j = 0; j < 8; j++)
-      if (entries[i].filename[j] != ' ')
-        name[k++] = entries[i].filename[j];
-    if (entries[i].ext[0] != ' ') {
-      name[k++] = '.';
-      for (int j = 0; j < 3; j++)
-        if (entries[i].ext[j] != ' ')
-          name[k++] = entries[i].ext[j];
+  for (uint32_t sector = 0; sector < root_dir_sectors; sector++) {
+    ata_read_sector(root_dir_start_sector + sector, buffer);
+    fat16_entry_t *entries = (fat16_entry_t *)buffer;
+
+    for (int i = 0; i < 16; i++) {
+      if ((uint8_t)entries[i].filename[0] == 0) {
+        // End of entries
+        serial_log("FAT16: End of entries reached.");
+        goto not_found;
+      }
+      if ((uint8_t)entries[i].filename[0] == 0xE5) {
+        // Deleted entry
+        continue;
+      }
+      if (entries[i].attributes == 0x0F) {
+        // LFN entry - ignore
+        continue;
+      }
+
+      char name[13];
+      int k = 0;
+      for (int j = 0; j < 8; j++)
+        if (entries[i].filename[j] != ' ')
+          name[k++] = entries[i].filename[j];
+      if (entries[i].ext[0] != ' ') {
+        name[k++] = '.';
+        for (int j = 0; j < 3; j++)
+          if (entries[i].ext[j] != ' ')
+            name[k++] = entries[i].ext[j];
+      }
+      name[k] = 0;
+
+      serial_log("FAT16: Found entry:");
+      serial_log(name);
+
+      if (strcmp(name, filename) == 0) {
+        serial_log("FAT16: Match found!");
+        return entries[i];
+      }
     }
-    name[k] = 0;
-
-    if (strcmp(name, filename) == 0)
-      return entries[i];
   }
 
+not_found:
+  serial_log("FAT16: File not found.");
   fat16_entry_t empty;
   memset(&empty, 0, sizeof(fat16_entry_t));
   return empty;
@@ -92,8 +118,12 @@ fat16_entry_t fat16_find_file(const char *filename) {
 void fat16_read_file(fat16_entry_t *entry, uint8_t *buffer) {
   uint32_t cluster = entry->first_cluster_low;
   uint32_t sector = data_start_sector + (cluster - 2) * bpb.sectors_per_cluster;
-
   uint32_t sectors_to_read = (entry->file_size + 511) / 512;
+
+  serial_log_hex("FAT16: Reading file from cluster ", cluster);
+  serial_log_hex("FAT16: Start sector ", sector);
+  serial_log_hex("FAT16: Sectors to read ", sectors_to_read);
+
   for (uint32_t i = 0; i < sectors_to_read; i++) {
     ata_read_sector(sector + i, buffer + (i * 512));
   }
@@ -425,18 +455,30 @@ static struct dirent *fat16_readdir_vfs(vfs_node_t *node, uint32_t index) {
 
       if (count == index) {
         static struct dirent d;
+        // Clear previous data
+        memset(d.d_name, 0, 256);
+        d.d_ino = 0;
+
         int k = 0;
         for (int j = 0; j < 8; j++)
           if (entries[i].filename[j] != ' ')
-            d.name[k++] = entries[i].filename[j];
+            d.d_name[k++] = entries[i].filename[j];
+
         if (entries[i].ext[0] != ' ') {
-          d.name[k++] = '.';
+          d.d_name[k++] = '.';
           for (int j = 0; j < 3; j++)
             if (entries[i].ext[j] != ' ')
-              d.name[k++] = entries[i].ext[j];
+              d.d_name[k++] = entries[i].ext[j];
         }
-        d.name[k] = 0;
-        d.inode = entries[i].first_cluster_low;
+        d.d_name[k] = 0;
+        d.d_ino = entries[i].first_cluster_low;
+        d.d_off = index;
+        d.d_reclen = sizeof(struct dirent);
+        if (entries[i].attributes & 0x10)
+          d.d_type = DT_DIR;
+        else
+          d.d_type = DT_REG;
+
         return &d;
       }
       count++;

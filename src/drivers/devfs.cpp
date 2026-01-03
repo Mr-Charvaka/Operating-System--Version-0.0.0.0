@@ -85,18 +85,18 @@ static struct dirent devfs_dirent;
 static struct dirent *devfs_readdir(vfs_node_t *node, uint32_t index) {
   (void)node;
   if (index == 0) {
-    strcpy(devfs_dirent.name, "null");
-    devfs_dirent.inode = 1;
+    strcpy(devfs_dirent.d_name, "null");
+    devfs_dirent.d_ino = 1;
     return &devfs_dirent;
   }
   if (index == 1) {
-    strcpy(devfs_dirent.name, "zero");
-    devfs_dirent.inode = 2;
+    strcpy(devfs_dirent.d_name, "zero");
+    devfs_dirent.d_ino = 2;
     return &devfs_dirent;
   }
   if (index == 2) {
-    strcpy(devfs_dirent.name, "tty");
-    devfs_dirent.inode = 3;
+    strcpy(devfs_dirent.d_name, "tty");
+    devfs_dirent.d_ino = 3;
     return &devfs_dirent;
   }
   return 0;

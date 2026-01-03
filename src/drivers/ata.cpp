@@ -13,6 +13,7 @@ void ata_wait_drq() {
 }
 
 void ata_read_sector(uint32_t lba, uint8_t *buffer) {
+  asm volatile("cli");
   ata_wait_bsy();
 
   outb(ATA_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F)); // Select Master Drive
@@ -31,6 +32,7 @@ void ata_read_sector(uint32_t lba, uint8_t *buffer) {
   for (int i = 0; i < 256; i++) {
     buf16[i] = inw(ATA_DATA);
   }
+  asm volatile("sti");
 }
 
 void ata_write_sector(uint32_t lba, uint8_t *buffer) {

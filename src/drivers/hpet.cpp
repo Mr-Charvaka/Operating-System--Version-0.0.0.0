@@ -34,8 +34,8 @@ uint64_t hpet_read_counter() {
 }
 
 void hpet_map_hardware() {
-  if (hpet_base)
-    paging_map(hpet_base, hpet_base, 3);
+  // Standard HPET address
+  paging_map(0xFED00000, 0xFED00000, 3);
 }
 
 } // extern "C"

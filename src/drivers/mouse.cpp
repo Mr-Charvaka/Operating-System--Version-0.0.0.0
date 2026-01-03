@@ -1,8 +1,7 @@
-#include "../drivers/mouse.h"
-#include "../drivers/vga.h"
 #include "../include/io.h"
 #include "../include/irq.h"
 #include "../include/types.h"
+#include "../kernel/apic.h"
 #include "../kernel/gui.h"
 #include "serial.h"
 
@@ -47,12 +46,18 @@ uint8_t mouse_read() {
 
 void mouse_callback(registers_t *regs) {
   uint8_t status = inb(0x64);
-  if (!(status & 0x20)) {
-    // Not mouse
+  if (!(status & 0x21)) { // Check bit 0 (data ready) and bit 5 (mouse data)
     return;
   }
 
-  mouse_byte[mouse_cycle++] = inb(0x60);
+  uint8_t data = inb(0x60);
+  if (!(status & 0x20)) {
+    // Not mouse data, might be keyboard?
+    // Usually status register bit 5 indicates mouse
+    return;
+  }
+
+  mouse_byte[mouse_cycle++] = data;
 
   if (mouse_cycle == 3) {
     mouse_cycle = 0;
@@ -68,32 +73,39 @@ void mouse_callback(registers_t *regs) {
 }
 
 void init_mouse() {
-  uint8_t _status;
+  serial_log("PS/2: Initializing controller...");
 
-  // Enable the auxiliary mouse device
+  // 1. Enable Keyboard & Mouse interfaces
   mouse_wait(1);
-  outb(0x64, 0xA8);
+  outb(0x64, 0xAE); // Enable Keyboard
+  mouse_wait(1);
+  outb(0x64, 0xA8); // Enable Mouse (Auxiliary)
 
-  // Enable the interrupts
+  // 2. Set Controller Command Byte
   mouse_wait(1);
-  outb(0x64, 0x20); // Command: Read Controller Command Byte
+  outb(0x64, 0x20); // Read Command Byte
   mouse_wait(0);
-  _status = (inb(0x60) | 2); // Set bit 1 (Enable IRQ12)
+  uint8_t status = inb(0x60);
+
+  // Enable IRQ1 (bit 0), IRQ12 (bit 1), enable clock (bit 4, 5 clear)
+  status |= 0x03;  // Enable interrupts
+  status &= ~0x30; // Enable clocks (clear disable bits)
+
   mouse_wait(1);
-  outb(0x64, 0x60); // Command: Write Controller Command Byte
+  outb(0x64, 0x60); // Write Command Byte
   mouse_wait(1);
-  outb(0x60, _status);
+  outb(0x60, status);
 
-  // Tell the mouse to use default settings
-  mouse_write(0xF6);
-  mouse_read(); // Acknowledge
+  // 3. Initialize Mouse Device
+  mouse_write(0xF6); // Set defaults
+  mouse_read();      // ACK
 
-  // Enable the mouse
-  mouse_write(0xF4);
-  mouse_read(); // Acknowledge
+  mouse_write(0xF4); // Enable data reporting
+  mouse_read();      // ACK
 
-  // Setup the ISR handler
+  // 4. Register Handler
   register_interrupt_handler(44, mouse_callback); // IRQ12 = IDT 44
+  ioapic_set_mask(12, false);
 
-  serial_log("MOUSE: Initialized and enabled IRQ12");
+  serial_log("PS/2: Mouse/Keyboard interfaces enabled.");
 }

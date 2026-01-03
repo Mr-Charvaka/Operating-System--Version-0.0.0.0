@@ -14,6 +14,7 @@ uint32_t *back_buffer = (uint32_t *)0;  // RAM
 // Initially NULL, set to back_buffer after init
 uint32_t *screen_buffer = (uint32_t *)0;
 
+// back_buffer dynamic allocation
 void init_graphics(uint32_t lfb_address) {
   frame_buffer = (uint32_t *)lfb_address;
 
@@ -23,6 +24,7 @@ void init_graphics(uint32_t lfb_address) {
     serial_log("GRAPHICS: CRITICAL! Failed to allocate backbuffer.");
     return;
   }
+
   memset(back_buffer, 0, SCREEN_WIDTH * SCREEN_HEIGHT * 4);
   screen_buffer = back_buffer;
   serial_log("GRAPHICS: Using dynamic backbuffer.");
@@ -31,10 +33,16 @@ void init_graphics(uint32_t lfb_address) {
 
 void swap_buffers() {
   if (back_buffer && frame_buffer) {
-    // serial_log("GRAPHICS: Swapping...");
-    //  Copy Backbuffer -> Framebuffer
+    // Debug: Verify pointers haven't been corrupted
+    if ((uint32_t)frame_buffer < 0xF0000000 ||
+        (uint32_t)back_buffer < 0xC0000000) {
+      serial_log("GRAPHICS: CRITICAL - Buffer pointer corruption!");
+      serial_log_hex("  frame_buffer: ", (uint32_t)frame_buffer);
+      serial_log_hex("  back_buffer:  ", (uint32_t)back_buffer);
+      for (;;)
+        ; // Halt
+    }
     memcpy(frame_buffer, back_buffer, SCREEN_WIDTH * SCREEN_HEIGHT * 4);
-    // serial_log("GRAPHICS: Swap Done.");
   }
 }
 
@@ -375,5 +383,16 @@ void draw_thick_line(int x1, int y1, int x2, int y2, int thickness,
   for (int i = 0; i < thickness; i++) {
     draw_line(x1 + i, y1, x2 + i, y2, color);
     draw_line(x1, y1 + i, x2, y2 + i, color);
+  }
+}
+
+void draw_bitmap(int x, int y, int w, int h, const uint32_t *data) {
+  for (int i = 0; i < h; i++) {
+    for (int j = 0; j < w; j++) {
+      uint32_t color = data[i * w + j];
+      if ((color >> 24) & 0xFF) { // Alpha check
+        put_pixel(x + j, y + i, color);
+      }
+    }
   }
 }

@@ -29,6 +29,10 @@ extern uint32_t *screen_buffer;
 #define PIXEL_WHITE 0xFFFFFFFF
 #define PIXEL_BLACK 0xFF000000
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void put_pixel(int x, int y, uint32_t color);
 void draw_rect(int x, int y, int w, int h, uint32_t color);
 void draw_line(int x1, int y1, int x2, int y2, uint32_t color);
@@ -58,5 +62,10 @@ void draw_pixel_grid(uint32_t bg_color, uint32_t grid_color, int spacing);
 void draw_pixel_box(int x, int y, int w, int h, uint32_t bg_color);
 void draw_thick_line(int x1, int y1, int x2, int y2, int thickness,
                      uint32_t color);
+void draw_bitmap(int x, int y, int w, int h, const uint32_t *data);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
