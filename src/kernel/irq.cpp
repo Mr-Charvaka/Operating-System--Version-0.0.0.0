@@ -5,7 +5,11 @@
 #include "../include/io.h"
 #include "../include/signal.h"
 #include "../include/string.h"
+#include "../include/types.h"
 
+
+#include "../drivers/acpi.h"
+#include "apic.h"
 
 // ISRs defined in isr.c or interrupt.asm need to be referenced here
 // but actually we used macros, so let's reference the isr32-47 symbols
@@ -58,6 +62,14 @@ void irq_install() {
 }
 
 // Use a single handler for dispatch
+#include "apic.h"
+
+void irq_set_mask(uint8_t irq, bool masked) {
+  if (lapic_base) {
+    ioapic_set_mask(irq, masked);
+  }
+}
+
 void irq_handler(registers_t *regs) {
   // Send EOI (End of Interrupt)
   if (lapic_base) {

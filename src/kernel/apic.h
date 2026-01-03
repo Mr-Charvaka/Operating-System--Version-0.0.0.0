@@ -42,6 +42,7 @@ void lapic_init();
 void lapic_eoi();
 void ioapic_init();
 void ioapic_set_irq(uint8_t irq, uint64_t vector_data);
+void ioapic_set_mask(uint8_t irq, bool masked);
 void apic_map_hardware();
 
 #ifdef __cplusplus

@@ -2,6 +2,7 @@
 #include "../drivers/acpi.h"
 #include "../drivers/serial.h"
 #include "../include/io.h"
+#include "../include/string.h"
 #include "../include/types.h"
 #include "paging.h"
 
@@ -84,21 +85,45 @@ void ioapic_init() {
   serial_log("PIC: Disabled.");
 
   // Default redirection: Map 16 legacy IRQs to vectors 32-47
+  // We want to ensure they are UNMASKED (bit 16 is 0)
+  // Delivery mode: Fixed (000), Destination mode: Physical (0)
   for (int i = 0; i < 16; i++) {
     uint32_t vector = 32 + i;
-    // Deliver to cpu_lapic_id
-    uint64_t entry = vector;
-    entry |= ((uint64_t)cpu_lapic_id << 56);
 
-    uint32_t target_irq = i;
+    // Low 32 bits of entry:
+    // bit 0-7: vector
+    // bit 8-10: delivery mode (000 = Fixed)
+    // bit 11: destination mode (0 = Physical)
+    // bit 12: delivery status (RO)
+    // bit 13: polarity (0 = Active High, 1 = Active Low)
+    // bit 14: remote IRR (RO)
+    // bit 15: trigger mode (0 = Edge, 1 = Level)
+    // bit 16: mask (0 = Unmasked, 1 = Masked)
+    uint32_t low_part =
+        vector | 0x10000; // Masked by default, Edge, Active High, Fixed
+
+    uint32_t target_gsi = i;
     if (isos[i]) {
-      target_irq = isos[i]->global_system_interrupt;
-      // Handle flags (polarity/trigger mode) if needed
+      target_gsi = isos[i]->global_system_interrupt;
+      // Many ISOs (like IRQ0 to GSI 2) are active high/edge
+      // but let's be explicit if flags indicate otherwise
+      // iso->flags: bit 0-1 (Polarity), bit 2-3 (Trigger Mode)
+      // Polarity: 1=AH, 3=AL. Trigger: 1=Edge, 3=Level.
+      if ((isos[i]->flags & 3) == 3)
+        low_part |= (1 << 13); // Active Low
+      if (((isos[i]->flags >> 2) & 3) == 3)
+        low_part |= (1 << 15); // Level Triggered
+
+      serial_log_hex("IO-APIC: Routing IRQ ", i);
+      serial_log_hex("IO-APIC: To GSI ", target_gsi);
     }
 
-    ioapic_set_irq(target_irq, entry);
+    uint64_t entry = low_part;
+    entry |= ((uint64_t)cpu_lapic_id << 56);
+
+    ioapic_set_irq(target_gsi, entry);
   }
-  serial_log("IO-APIC: Default IRQ routing set.");
+  serial_log("IO-APIC: Legacy IRQs 0-15 unmasked and routed.");
 }
 
 void ioapic_set_irq(uint8_t irq, uint64_t vector_data) {
@@ -109,11 +134,27 @@ void ioapic_set_irq(uint8_t irq, uint64_t vector_data) {
   ioapic_write(IOAPIC_REDTBL + irq * 2 + 1, high);
 }
 
+void ioapic_set_mask(uint8_t irq, bool masked) {
+  if (irq >= 16)
+    return;
+  uint32_t gsi = irq;
+  if (isos[irq]) {
+    gsi = isos[irq]->global_system_interrupt;
+  }
+
+  uint32_t low = ioapic_read(IOAPIC_REDTBL + gsi * 2);
+  if (masked)
+    low |= (1 << 16);
+  else
+    low &= ~(1 << 16);
+  ioapic_write(IOAPIC_REDTBL + gsi * 2, low);
+}
+
 void apic_map_hardware() {
-  if (lapic_base)
-    paging_map(lapic_base, lapic_base, 3);
-  if (ioapic_base)
-    paging_map(ioapic_base, ioapic_base, 3);
+  // Standard APIC addresses (mapped before ACPI discovery)
+  // LAPIC is at 0xFEE00000, IO-APIC is at 0xFEC00000
+  paging_map(0xFEE00000, 0xFEE00000, 3); // LAPIC
+  paging_map(0xFEC00000, 0xFEC00000, 3); // IO-APIC
 }
 
 } // extern "C"

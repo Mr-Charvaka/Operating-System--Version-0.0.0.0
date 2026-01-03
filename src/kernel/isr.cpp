@@ -5,7 +5,6 @@
 #include "../include/signal.h"
 #include "../include/string.h"
 
-
 extern "C" {
 isr_t interrupt_handlers[256];
 }
