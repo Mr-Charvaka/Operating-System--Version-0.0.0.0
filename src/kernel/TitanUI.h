@@ -4,223 +4,335 @@
 #include "../drivers/graphics.h"
 #include "../include/Std/Types.h"
 #include "../include/string.h"
-#include "TitanAssets.h"
+
+// Forward declaration for launch_app used by AppLaunchButton
+extern "C" void launch_app(const char *name);
 
 namespace TitanUI {
 
 enum class DisplayType { Block, FlexRow, FlexColumn };
+enum class Orientation { Horizontal, Vertical };
 enum class EventType { MouseMove, MouseClick, KeyPress };
+enum class WidgetType {
+  Component,
+  Label,
+  Button,
+  ProgressBar,
+  Separator,
+  BoxLayout,
+  TextBox,
+  AssetView,
+  CheckBox,
+  RadioButton,
+  GroupBox,
+  ListView,
+  ScrollBar,
+  Slider,
+  Spinner,
+  StatusBar,
+  TabWidget,
+  TableView,
+  TreeView,
+  AnalogClock,
+  IconView,
+  Calendar,
+  ColorPicker,
+  Link,
+  ComboBox,
+  Image,
+  TerminalWidget
+};
 
 struct Style {
   uint32_t backgroundColor = 0x00000000;
-  uint32_t borderColor = 0xFF000000; // Black for NeoPop
+  uint32_t borderColor = 0xFF000000;
   int borderRadius = 0;
   int padding = 0;
   int margin = 0;
   bool visible = true;
   float opacity = 1.0f;
   bool glassmorphism = false;
-  bool neoPop = false; // Enable CRED NeoPop style (Plunk shadow)
+  bool neoPop = false;
 };
 
 class Component {
 public:
-  int x = 0, y = 0, width = 0, height = 0;
+  static const uint32_t MAGIC_VALUE = 0xDEADBEEF;
+  uint32_t magic;
+  int x, y, width, height;
   Style style;
-  Component *parent = nullptr;
-  Component *children[16] = {nullptr};
-  int childCount = 0;
+  Component *parent;
 
-  virtual ~Component() {}
+  static const int MAX_CHILDREN = 32;
+  Component *children[MAX_CHILDREN];
+  int childCount;
 
-  void add_child(Component *child) {
-    if (childCount < 16) {
-      child->parent = this;
-      children[childCount++] = child;
-    }
-  }
+  Component();
+  virtual ~Component();
 
-  int get_absolute_x() { return (parent ? parent->get_absolute_x() : 0) + x; }
-  int get_absolute_y() { return (parent ? parent->get_absolute_y() : 0) + y; }
+  virtual WidgetType type() const;
+  virtual void render();
+  virtual void handle_event(EventType type, int arg1, int arg2);
 
-  virtual void render() {
-    if (!style.visible)
-      return;
+  void add_child(Component *child);
+  int get_absolute_x();
+  int get_absolute_y();
 
-    int absX = get_absolute_x();
-    int absY = get_absolute_y();
-
-    if (style.neoPop) {
-      render_neopop(absX, absY, width, height, style.backgroundColor);
-    } else if (style.glassmorphism) {
-      render_glass(absX, absY, width, height, style.borderRadius);
-    } else if (style.backgroundColor != 0) {
-      if (style.borderRadius > 0) {
-        draw_rounded_rect(absX, absY, width, height, style.borderRadius,
-                          style.backgroundColor);
-      } else {
-        draw_rect(absX, absY, width, height, style.backgroundColor);
-      }
-    }
-
-    // Render Children
-    for (int i = 0; i < childCount; i++) {
-      if (children[i])
-        children[i]->render();
-    }
-  }
-
-  virtual void handle_event(EventType type, int arg1, int arg2) {
-    for (int i = childCount - 1; i >= 0; i--) {
-      if (children[i])
-        children[i]->handle_event(type, arg1, arg2);
-    }
-  }
-
-  void render_glass(int x, int y, int w, int h, int r) {
-    uint32_t glassFill = 0x40FFFFFF;
-    draw_rounded_rect(x, y, w, h, r, glassFill);
-  }
-
+protected:
+  void render_glass(int x, int y, int w, int h, int r);
   void render_neopop(int x, int y, int w, int h, uint32_t color,
-                     bool pressed = false) {
-    int offset = pressed ? 3 : 0;
-
-    // NeoPop "Plunk" Effect (Shadow)
-    if (!pressed) {
-      // Shadow faces (Right and Bottom) for 3D effect
-      // Right Face
-      draw_rect(x + w, y + 3, 3, h, 0xFF000000);
-      // Bottom Face
-      draw_rect(x + 3, y + h, w, 3, 0xFF000000);
-      // Corner Filler
-      draw_rect(x + w, y + h, 3, 3, 0xFF000000);
-    }
-
-    // Main Surface (Translated if pressed)
-    int sx = x + offset;
-    int sy = y + offset;
-    draw_rect(sx, sy, w, h, color);
-
-    // Border - Solid Black 2px
-    uint32_t borderColor = 0xFF000000;
-    // Top
-    draw_rect(sx, sy, w, 2, borderColor);
-    // Bottom
-    draw_rect(sx, sy + h - 2, w, 2, borderColor);
-    // Left
-    draw_rect(sx, sy, 2, h, borderColor);
-    // Right
-    draw_rect(sx + w - 2, sy, 2, h, borderColor);
-  }
+                     bool pressed = false);
 };
 
 class Label : public Component {
 public:
   char text[64];
-  uint32_t color = COLOR_BLACK;
-  int scale = 1;
-
-  Label(const char *t) { strcpy(text, t); }
-
-  void render() override {
-    if (!style.visible)
-      return;
-    draw_string_scaled(get_absolute_x(), get_absolute_y(), text, color, scale);
-  }
+  uint32_t color;
+  int scale;
+  Label(const char *t);
+  WidgetType type() const override;
+  void render() override;
 };
 
 class Button : public Component {
 public:
-  bool hovered = false;
-  bool isPressed = false;
-  void (*onClick)() = nullptr;
+  bool hovered;
+  bool isPressed;
+  char text[64];
+  void (*onClick)();
 
-  void render() override {
-    if (!style.visible)
-      return;
-
-    int absX = get_absolute_x();
-    int absY = get_absolute_y();
-
-    if (style.neoPop) {
-      uint32_t bg = style.backgroundColor ? style.backgroundColor : 0xFFFFFFFF;
-      // Call parent's helper (now public/protected hopefully)
-      // Since I'm editing the whole block, I'll make sure it's accessible.
-      // Actually, the previous block made it private. I need to make sure I
-      // REPLACE the private visibility label too if I can. Wait, replace target
-      // includes "private:".
-
-      ((Component *)this)
-          ->render_neopop(absX, absY, width, height, bg, isPressed);
-
-      // Render children (Naive: won't offset. Acceptable for now)
-      for (int i = 0; i < childCount; i++) {
-        if (children[i])
-          children[i]->render();
-      }
-      return;
-    }
-
-    if (style.backgroundColor != 0) {
-      uint32_t bgColor = hovered ? 0xFFE0E0E0 : style.backgroundColor;
-      draw_rect(absX, absY, width, height, bgColor);
-    }
-    // Children
-    for (int i = 0; i < childCount; i++) {
-      if (children[i])
-        children[i]->render();
-    }
-  }
-
-  void handle_event(EventType type, int mx, int my) override {
-    int absX = get_absolute_x();
-    int absY = get_absolute_y();
-    if (mx >= absX && mx < absX + width && my >= absY && my < absY + height) {
-      if (type == EventType::MouseMove)
-        hovered = true;
-      if (type == EventType::MouseClick && onClick)
-        onClick();
-    } else {
-      if (type == EventType::MouseMove)
-        hovered = false;
-    }
-    Component::handle_event(type, mx, my);
-  }
+  Button();
+  WidgetType type() const override;
+  void render() override;
+  void handle_event(EventType type, int mx, int my) override;
 };
 
-// New Premium Asset Component
-class AssetView : public Component {
+class AppLaunchButton : public Button {
+public:
+  char target[32];
+  WidgetType type() const override;
+  void handle_event(EventType type, int mx, int my) override;
+};
+
+class VectorIcon : public Component {
+public:
+  int iconType;
+  VectorIcon(int type, int w, int h);
+  WidgetType type() const override;
+  void render() override;
+};
+
+class ProgressBar : public Component {
+public:
+  int value = 0;
+  int max = 100;
+  uint32_t progressColor = 0xFF00FF00;
+  WidgetType type() const override;
+  void render() override;
+};
+
+class Separator : public Component {
+public:
+  Orientation orientation = Orientation::Horizontal;
+  WidgetType type() const override;
+  void render() override;
+};
+
+class BoxLayout : public Component {
+public:
+  Orientation orientation;
+  int spacing = 5;
+  BoxLayout(Orientation o);
+  WidgetType type() const override;
+  void perform_layout();
+  void render() override;
+};
+
+class VerticalBoxLayout : public BoxLayout {
+public:
+  VerticalBoxLayout();
+};
+
+class HorizontalBoxLayout : public BoxLayout {
+public:
+  HorizontalBoxLayout();
+};
+
+class CheckBox : public Component {
+public:
+  bool checked = false;
+  char label[64];
+  CheckBox(const char *l);
+  WidgetType type() const override;
+  void render() override;
+  void handle_event(EventType type, int arg1, int arg2) override;
+};
+
+class RadioButton : public Component {
+public:
+  bool selected = false;
+  char label[64];
+  RadioButton(const char *l);
+  WidgetType type() const override;
+  void render() override;
+};
+
+class GroupBox : public Component {
+public:
+  char title[64];
+  GroupBox(const char *t);
+  WidgetType type() const override;
+  void render() override;
+};
+
+class ListView : public Component {
+public:
+  char items[10][32];
+  int itemCount = 0;
+  int selectedIndex = -1;
+  ListView(); // Added
+  WidgetType type() const override;
+  void add_item(const char *s);
+  void render() override;
+};
+
+class ScrollBar : public Component {
+public:
+  int value = 0;
+  int max = 100;
+  Orientation orientation = Orientation::Vertical;
+  ScrollBar(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class Slider : public Component {
+public:
+  int value = 50;
+  int min = 0;
+  int max = 100;
+  Slider(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class Spinner : public Component {
+public:
+  int value = 0;
+  Spinner();
+  WidgetType type() const override;
+  void render() override;
+};
+
+class StatusBar : public Component {
+public:
+  char text[64];
+  StatusBar();
+  WidgetType type() const override;
+  void render() override;
+};
+
+class TabWidget : public Component {
+public:
+  char tabLabels[4][32];
+  int tabCount = 0;
+  int activeTab = 0;
+  TabWidget(); // Added
+  void add_tab(const char *label);
+  WidgetType type() const override;
+  void render() override;
+};
+
+class TableView : public Component {
+public:
+  TableView(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class TreeView : public Component {
+public:
+  TreeView(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class AnalogClock : public Component {
+public:
+  AnalogClock(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class IconView : public Component {
+public:
+  struct Icon {
+    char label[32];
+    const uint32_t *data;
+  };
+  Icon icons[8];
+  int iconCount = 0;
+  IconView(); // Added
+  void add_icon(const char *label, const uint32_t *data);
+  WidgetType type() const override;
+  void render() override;
+};
+
+class Calendar : public Component {
+public:
+  Calendar(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class ColorPicker : public Component {
+public:
+  ColorPicker(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class Link : public Component {
+public:
+  char url[64];
+  char text[64];
+  Link(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class ComboBox : public Component {
+public:
+  char selectedItem[32];
+  ComboBox(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class Image : public Component {
 public:
   const uint32_t *data = nullptr;
-
-  AssetView(const uint32_t *pixelData, int w, int h) {
-    data = pixelData;
-    width = w;
-    height = h;
-  }
-
-  void render() override {
-    if (!style.visible || !data)
-      return;
-
-    int absX = get_absolute_x();
-    int absY = get_absolute_y();
-
-    // Fast Pixel Blitting
-    for (int i = 0; i < height; i++) {
-      for (int j = 0; j < width; j++) {
-        uint32_t color = data[i * width + j];
-        // Simple Chroma Key for transparency (skip #000000 black if used as
-        // background) In our Python script, we can improve this, but for now
-        // just raw draw
-        if (color != 0) { // Assuming 0 is transparent/black background
-          put_pixel(absX + j, absY + i, color);
-        }
-      }
-    }
-  }
+  Image(); // Added
+  WidgetType type() const override;
+  void render() override;
 };
+
+class TerminalWidget : public Component {
+public:
+  TerminalWidget(); // Added
+  WidgetType type() const override;
+  void render() override;
+};
+
+class TextBox : public Component {
+public:
+  char text[128];
+  TextBox();
+  WidgetType type() const override;
+  void render() override;
+};
+
+Component *parse_gml(const char *gml);
 
 } // namespace TitanUI
 

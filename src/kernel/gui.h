@@ -3,6 +3,10 @@
 
 #include "../include/types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // PHASE 13: Action IDs for Context Menu
 #define ACTION_NEW_FOLDER 1
 #define ACTION_NEW_FILE 2
@@ -66,6 +70,13 @@ typedef struct {
   int restore_x, restore_y, restore_w, restore_h;
   int type;           // Window type
   int hovered_button; // -1=none, 0=close, 1=minimize, 2=maximize
+
+  // TitanUI integration
+  void *titan_root; // actually TitanUI::Component*
+
+  // IPC / Shared Memory
+  uint32_t *framebuffer;
+  int shm_id;
 } window_t;
 
 // PHASE 5: Clipboard
@@ -114,5 +125,9 @@ void launch_app(const char *app_name);
 // Retro Pixel Notifications
 void add_notification(const char *from, const char *msg);
 void draw_notifications();
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

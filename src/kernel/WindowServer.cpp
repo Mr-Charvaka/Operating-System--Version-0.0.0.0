@@ -1,60 +1,48 @@
 #include "../drivers/bmp.h"
+#include "../drivers/fat16.h"
 #include "../drivers/graphics.h"
 #include "../drivers/rtc.h"
 #include "../drivers/serial.h"
 #include "../include/Std/Types.h"
+#include "../include/msg.h"
 #include "../include/string.h"
 #include "../include/vfs.h"
 #include "../kernel/TitanUI.h"
 #include "../kernel/gui.h"
 #include "../kernel/memory.h"
 #include "../kernel/process.h"
+#include "../kernel/shm.h"
+#include "../kernel/socket.h"
+#include "../kernel/tty.h"
 #include "TitanAssets.h"
+#include "shm.h"
+#include "socket.h"
 
 using namespace TitanUI;
 
-extern "C" int fat16_create_file(const char *filename);
-extern "C" int fat16_write_file(const char *filename, uint8_t *data,
-                                uint32_t size);
-extern "C" int fat16_mkdir(const char *name);
-extern "C" int fat16_delete_file(const char *filename);
-extern "C" void fat16_get_stats_bytes(uint32_t *total, uint32_t *free);
+extern "C" {
+void fat16_get_stats_bytes(uint32_t *total, uint32_t *free);
+}
 
-// Forward declarations for C++ internal usage
-void draw_desktop();
-void swap_buffers();
-void draw_context_menu();
-void handle_menu_action(int action_id);
-void draw_window(window_t *win);
-void save_mouse_bg(int x, int y);
-void restore_mouse_bg(int x, int y);
-void draw_cursor_bitmap(int x, int y);
-uint32_t get_pixel(int x, int y);
-void draw_file_manager_content(window_t *win);
-void draw_system_monitor_content(window_t *win);
-void console_execute(window_t *win, char *cmd);
-void launch_app(const char *app_name); // Forward declaration for launch_app
-void load_file_list();
-void show_context_menu(int x, int y, int context_type);
-void draw_system_dashboard_content(window_t *win);
-void draw_notifications();
-void init_terminal_apps();
-
-// Mouse State
-int m_x = 160;
-int m_y = 100;
-uint32_t mouse_bg_buffer[12 * 18]; // Save background behind cursor
-int mouse_left = 0;
-int mouse_right = 0;
-
-int drag_window_id = -1; // -1 = None
-int drag_offset_x = 0;
-int drag_offset_y = 0;
-int focused_window_id = -1; // Window receiving keyboard input
-int terminal_window_id = -1;
-
-// PHASE 5: Clipboard
-clipboard_t global_clipboard = {{0}, 0};
+extern "C" void draw_desktop();
+extern "C" void swap_buffers();
+extern "C" void draw_context_menu();
+extern "C" void handle_menu_action(int action_id);
+extern "C" void draw_window(window_t *win);
+extern "C" void save_mouse_bg(int x, int y);
+extern "C" void restore_mouse_bg(int x, int y);
+extern "C" void draw_cursor_bitmap(int x, int y);
+extern "C" uint32_t get_pixel(int x, int y);
+extern "C" void draw_file_manager_content(window_t *win);
+extern "C" void draw_system_monitor_content(window_t *win);
+extern "C" void console_execute(window_t *win, char *cmd);
+extern "C" void load_file_list();
+extern "C" void show_context_menu(int x, int y, int context_type);
+extern "C" void draw_system_dashboard_content(window_t *win);
+extern "C" void draw_notifications();
+extern "C" void init_terminal_apps();
+extern "C" void launch_app(const char *name);
+extern "C" void ws_ipc_handler();
 
 // PHASE 2: File Manager
 typedef struct {
@@ -63,28 +51,78 @@ typedef struct {
   uint8_t is_directory;
 } file_entry_t;
 
-file_entry_t file_list[50];
-int file_count = 0;
-int selected_file = -1;
-int file_scroll_offset = 0;
+#define MAX_WINDOWS 10
 
-// TitanUI Global State
-Component *desktop_root = nullptr;
+// PROTECTIVE SHIELD FOR BSS - Absorbs linear overflows from other modules
+static uint8_t bss_clobber_shield[8192];
+
+// TitanUI Global State - CONTEXT WRAPPER
+// We use a static instance linked to a pointer to ensure validity from early
+// boot
+struct GUIContext {
+  int m_x, m_y;
+  uint32_t mouse_bg_buffer[12 * 18];
+  int mouse_left, mouse_right;
+  int drag_window_id;
+  int drag_offset_x, drag_offset_y;
+  int focused_window_id;
+  int terminal_window_id;
+
+  Component *desktop_root;
+  Component *dock_container;
+
+  window_t windows[MAX_WINDOWS];
+  int window_count;
+
+  int hovered_dock_icon;
+
+  // File Manager State
+  file_entry_t file_list[50];
+  int file_count;
+  int selected_file;
+  int file_scroll_offset;
+
+  // PHASE 5: Clipboard
+  clipboard_t global_clipboard;
+};
+
+static GUIContext ctx_instance;
+static GUIContext *ctx = &ctx_instance;
+
+// Convenience macros to minimize code changes
+#define m_x (ctx->m_x)
+#define m_y (ctx->m_y)
+#define mouse_bg_buffer (ctx->mouse_bg_buffer)
+#define mouse_left (ctx->mouse_left)
+#define mouse_right (ctx->mouse_right)
+#define drag_window_id (ctx->drag_window_id)
+#define drag_offset_x (ctx->drag_offset_x)
+#define drag_offset_y (ctx->drag_offset_y)
+#define focused_window_id (ctx->focused_window_id)
+#define terminal_window_id (ctx->terminal_window_id)
+#define desktop_root (ctx->desktop_root)
+#define dock_container (ctx->dock_container)
+#define windows (ctx->windows)
+#define window_count (ctx->window_count)
+#define hovered_dock_icon (ctx->hovered_dock_icon)
+#define file_list (ctx->file_list)
+#define file_count (ctx->file_count)
+#define selected_file (ctx->selected_file)
+#define file_scroll_offset (ctx->file_scroll_offset)
+#define global_clipboard (ctx->global_clipboard)
+
 struct DockIconComponent : public Button {
   int appIndex;
   DockIconComponent(int idx) : appIndex(idx) {}
 };
-Component *dock_container = nullptr;
 
-// PHASE 7: App launcher
-int hovered_dock_icon = -1;
-
-// Window System
-// struct window_t is defined in gui.h
-
-#define MAX_WINDOWS 10
-window_t windows[MAX_WINDOWS];
-int window_count = 0;
+// Terminal output buffer - shared with TTY
+extern "C" {
+char terminal_output_buffer[2048];
+int terminal_output_len = 0;
+void terminal_append_output(const char *str);
+void terminal_refresh();
+}
 
 // Context Menu Global State
 context_menu_t global_menu = {0, 0, 0, 0, 0, {{0, 0}}, 0, -1};
@@ -174,90 +212,7 @@ void restore_mouse_bg(int x, int y);
 void draw_cursor_bitmap(int x, int y);
 uint32_t get_pixel(int x, int y);
 
-struct AppLaunchButton : public Button {
-  char target[32];
-  void handle_event(EventType type, int mx, int my) override {
-    if (type == EventType::MouseClick) {
-      int absX = get_absolute_x();
-      int absY = get_absolute_y();
-      if (mx >= absX && mx < absX + width && my >= absY && my < absY + height) {
-        launch_app(target);
-      }
-    }
-    Button::handle_event(type, mx, my);
-  }
-};
-
-// Procedural Icon Component
-class VectorIcon : public Component {
-public:
-  int iconType;
-  VectorIcon(int type, int w, int h) : iconType(type) {
-    width = w;
-    height = h;
-    style.backgroundColor = 0; // Transparent container
-  }
-
-  void render() override {
-    int ax = get_absolute_x();
-    int ay = get_absolute_y();
-    uint32_t border = 0xFF000000;
-
-    if (iconType == 0) { // File Manager (NeoPop Blue)
-      uint32_t blue = 0xFF3D5AFE;
-      draw_rect(ax, ay + 2, width / 2, 10, blue);
-      draw_rect(ax, ay + 2, width / 2, 1, border);
-      draw_rect(ax, ay + 2, 1, 10, border);
-      draw_rect(ax + width / 2, ay + 2, 1, 10, border);
-      draw_rect(ax, ay + 8, width, height - 8, blue);
-      draw_rect(ax, ay + 8, width, 1, border);
-      draw_rect(ax, ay + height - 1, width, 1, border);
-      draw_rect(ax, ay + 8, 1, height - 8, border);
-      draw_rect(ax + width - 1, ay + 8, 1, height - 8, border);
-      draw_rect(ax + 5, ay + 15, width - 10, height - 20, 0xFFFFFFFF);
-    } else if (iconType == 1) { // Terminal
-      draw_rect(ax, ay, width, height, 0xFF212121);
-      draw_rect(ax, ay, width, 1, border);
-      draw_rect(ax, ay + height - 1, width, 1, border);
-      draw_rect(ax, ay, 1, height, border);
-      draw_rect(ax + width - 1, ay, 1, height, border);
-      draw_rect(ax, ay, width, 12, 0xFFEEEEEE);
-      draw_rect(ax, ay + 11, width, 1, border);
-      draw_rect(ax + 8, ay + 20, 12, 3, 0xFF00E676);
-      draw_rect(ax + 22, ay + 20, 16, 3, 0xFF00E676);
-    } else if (iconType == 2) { // Notepad
-      draw_rect(ax, ay, width, height, 0xFFFFFFFF);
-      draw_rect(ax, ay, width, 1, border);
-      draw_rect(ax, ay + height - 1, width, 1, border);
-      draw_rect(ax, ay, 1, height, border);
-      draw_rect(ax + width - 1, ay, 1, height, border);
-      draw_rect(ax, ay, width, 10, 0xFFFFEA00);
-      draw_rect(ax, ay + 9, width, 1, border);
-      for (int i = 20; i < height - 10; i += 8) {
-        draw_rect(ax + 6, ay + i, width - 12, 1, 0xFFE0E0E0);
-      }
-    } else if (iconType == 3) { // System Monitor
-      draw_rect(ax, ay, width, height, 0xFF333333);
-      draw_rect(ax, ay, width, 1, border);
-      draw_rect(ax, ay + height - 1, width, 1, border);
-      draw_rect(ax, ay, 1, height, border);
-      draw_rect(ax + width - 1, ay, 1, height, border);
-      draw_rect(ax + 6, ay + 6, width - 12, 16, 0xFF000000);
-      int gx = ax + 8;
-      int gy = ay + 14;
-      draw_line(gx, gy, gx + 5, gy, 0xFF00E676);
-      draw_line(gx + 5, gy, gx + 8, gy - 5, 0xFF00E676);
-      draw_line(gx + 8, gy - 5, gx + 12, gy + 5, 0xFF00E676);
-      draw_line(gx + 12, gy + 5, gx + 15, gy, 0xFF00E676);
-      draw_line(gx + 15, gy, ax + width - 8, gy, 0xFF00E676);
-      uint32_t gold = 0xFFFFD700;
-      for (int i = 8; i < width - 8; i += 8) {
-        draw_rect(ax + i, ay + height - 4, 4, 4, gold);
-        draw_rect(ax + i, ay, 4, 4, gold);
-      }
-    }
-  }
-};
+// (Classes moved to TitanUI.h)
 
 void init_terminal_apps() {
   // Launch System Dashboard as the primary window
@@ -271,24 +226,27 @@ void init_terminal_apps() {
 }
 
 void gui_init() {
+  // Use the static instance
+  memset(&ctx_instance, 0, sizeof(GUIContext));
+
   m_x = SCREEN_WIDTH / 2;
   m_y = SCREEN_HEIGHT / 2;
+  drag_window_id = -1;
+  focused_window_id = -1;
+  terminal_window_id = -1;
+  hovered_dock_icon = -1;
 
   serial_log("GUI_INIT: Starting...");
+
   // Initialize TitanUI Roots
   desktop_root = new Component();
-  serial_log_hex("GUI_INIT: desktop_root = ", (uint32_t)desktop_root);
   desktop_root->width = SCREEN_WIDTH;
   desktop_root->height = SCREEN_HEIGHT;
-  serial_log("GUI_INIT: desktop_root initialized.");
 
   // Modern Dock using NeoPop Style
-  serial_log("GUI_INIT: Allocating Dock...");
   int dock_w = 460;
   int dock_h = 80;
   dock_container = new Component();
-  serial_log_hex("GUI_INIT: Dock allocated at ", (uint32_t)dock_container);
-
   dock_container->x = (SCREEN_WIDTH - dock_w) / 2;
   dock_container->y = SCREEN_HEIGHT - 90;
   dock_container->width = dock_w;
@@ -297,35 +255,12 @@ void gui_init() {
   dock_container->style.backgroundColor = 0xFFFFFFFF; // White Dock Surface
 
   desktop_root->add_child(dock_container);
-  serial_log("GUI_INIT: Dock added to desktop.");
 
   const char *appNames[] = {"File Manager", "Terminal", "Notepad",
                             "System Monitor"};
 
-  // VectorIcon definition moved to global scope
-
-  serial_log("GUI_INIT: VectorIcon class defined.");
-
   for (int i = 0; i < 4; i++) {
-    serial_log_hex("GUI_INIT: Creating LaunchButton ", i);
-    // Assuming AppLaunchButton is defined earlier in the file (it was seen in
-    // previous steps) If not, we might need to use Button or define it. Based
-    // on Step 1568 context, there was a class with handle_event that called
-    // launch_app. I will call it AppLaunchButton to match the snippet I saw
-    // using 'target'.
-
-    // We need to define AppLaunchButton if it was inside the function too?
-    // Step 1568 showed: class ... : public Button { char target[32]; ... }
-    // It didn't start with "class AppLaunchButton". It started with "class
-    // VectorIcon" AFTER that. The previous class (lines 160-171 in Step 1568)
-    // WAS the button! But it was anonymous? Or named? "160: char target[32];"
-    // -> It was inside a class definition. I suspect the class was named
-    // `AppLaunchButton`. I will assume it is available. If not, I'll get a
-    // compilation error, but better than syntax error.
-
     AppLaunchButton *launchBtn = new AppLaunchButton();
-    serial_log_hex("GUI_INIT: LaunchBtn allocated ", (uint32_t)launchBtn);
-
     launchBtn->x = 25 + i * 110;
     launchBtn->y = 15;
     launchBtn->width = 50;
@@ -333,18 +268,16 @@ void gui_init() {
     launchBtn->style.backgroundColor = 0;
     strcpy(launchBtn->target, appNames[i]);
 
-    serial_log("GUI_INIT: Creating VectorIcon...");
     VectorIcon *icon = new VectorIcon(i, 50, 50);
-    serial_log_hex("GUI_INIT: VectorIcon allocated ", (uint32_t)icon);
-
     launchBtn->add_child(icon);
     dock_container->add_child(launchBtn);
   }
-  serial_log("GUI_INIT: Icons created.");
 
   // PHASE 1 & 7: Create initial windows...
-  // (existing window initialization stays for now, but will migrate to TitanUI)
   init_terminal_apps();
+
+  // Start IPC Handler
+  create_kernel_thread(ws_ipc_handler);
 }
 
 void draw_taskbar() {
@@ -380,7 +313,6 @@ void draw_taskbar() {
 }
 
 void draw_dock() {
-  // Simply tell the TitanUI container to render itself
   if (dock_container) {
     dock_container->render();
   }
@@ -444,6 +376,31 @@ void draw_window(window_t *win) {
     return;
   }
 
+  // IPC / Shared Memory rendering
+  if (win->framebuffer) {
+    for (int vy = 0; vy < win->height - 40; vy++) {
+      for (int vx = 0; vx < win->width - 8; vx++) {
+        uint32_t color = win->framebuffer[vy * (win->width - 8) + vx];
+        if ((color >> 24) > 0) {
+          put_pixel(win->x + 4 + vx, win->y + 36 + vy, color);
+        }
+      }
+    }
+    return;
+  }
+
+  // TitanUI modern rendering integration
+  if (win->titan_root) {
+    Component *root = (Component *)win->titan_root;
+    // Set root dimensions to window content area
+    root->x = win->x + 4;
+    root->y = win->y + 36;
+    root->width = win->width - 8;
+    root->height = win->height - 40;
+    root->render();
+    return;
+  }
+
   // Draw Content (Text) for normal windows
   int content_x = win->x + 8;
   int content_y = win->y + 40;
@@ -477,7 +434,22 @@ void draw_window(window_t *win) {
 }
 
 void draw_desktop() {
+  if (!ctx)
+    return;
   serial_log("DRAW: Desktop start.");
+
+  // Pointer health check
+  extern uint32_t *screen_buffer;
+  if ((uint32_t)screen_buffer < 0xC1000000) {
+    static bool warned_sb = false;
+    if (!warned_sb) {
+      warned_sb = true;
+      serial_log_hex("!!! CRITICAL: screen_buffer became invalid: ",
+                     (uint32_t)screen_buffer);
+    }
+    return;
+  }
+
   // Retro Pixel Grid Background
   draw_pixel_grid(PIXEL_BLUE, 0xFF3D7AB8, 40); // Darker blue grid
 
@@ -510,6 +482,8 @@ void draw_desktop() {
 // Called by mouse driver
 // Called by mouse driver
 void update_mouse_position(int8_t dx, int8_t dy, uint8_t buttons) {
+  if (!ctx)
+    return;
   // 1. Restore background at old position
   restore_mouse_bg(m_x, m_y);
 
@@ -558,7 +532,8 @@ void update_mouse_position(int8_t dx, int8_t dy, uint8_t buttons) {
   }
 
   // Dispatch event to TitanUI Tree
-  if (desktop_root) {
+  if (desktop_root && (uint32_t)desktop_root != 0xFF4A90D9 &&
+      (uint32_t)desktop_root >= 0xC0000000) {
     desktop_root->handle_event(EventType::MouseMove, m_x, m_y);
   }
 
@@ -660,7 +635,8 @@ void update_mouse_position(int8_t dx, int8_t dy, uint8_t buttons) {
       }
     }
 
-    if (!handled && desktop_root) {
+    if (!handled && desktop_root && (uint32_t)desktop_root != 0xFF4A90D9 &&
+        (uint32_t)desktop_root >= 0xC0000000) {
       // Dispatch click to TitanUI Tree (Handles Dock Icons)
       desktop_root->handle_event(EventType::MouseClick, m_x, m_y);
       handled = 1; // Mark as handled if it hit a component (simplified)
@@ -766,11 +742,24 @@ void close_window(int id) {
 
   serial_log_hex("GUI: Closing window ", id);
 
+  // Release SHM segment if it exists
+  if (windows[id].shm_id >= 0) {
+    shm_free(windows[id].shm_id);
+  }
+
+  // Release TitanUI tree
+  if (windows[id].titan_root) {
+    delete (TitanUI::Component *)windows[id].titan_root;
+    windows[id].titan_root = nullptr;
+  }
+
+  // Shift window array
   for (int i = id; i < window_count - 1; i++) {
     windows[i] = windows[i + 1];
   }
   window_count--;
 
+  // Update Global Indices
   if (focused_window_id == id) {
     focused_window_id = (window_count > 0) ? window_count - 1 : -1;
   } else if (focused_window_id > id) {
@@ -781,6 +770,12 @@ void close_window(int id) {
     terminal_window_id = -1;
   } else if (terminal_window_id > id) {
     terminal_window_id--;
+  }
+
+  if (drag_window_id == id) {
+    drag_window_id = -1;
+  } else if (drag_window_id > id) {
+    drag_window_id--;
   }
 
   draw_desktop();
@@ -1014,10 +1009,10 @@ void load_file_list() {
     struct dirent *ent;
     while ((ent = readdir_vfs(vfs_root, i++)) != 0 && file_count < 50) {
       file_entry_t *entry = &file_list[file_count++];
-      strcpy(entry->name, ent->name);
+      strcpy(entry->name, ent->d_name);
 
       // Try to find the actual node to get size and type
-      vfs_node_t *node = finddir_vfs(vfs_root, ent->name);
+      vfs_node_t *node = finddir_vfs(vfs_root, ent->d_name);
       if (node) {
         entry->size = node->length;
         entry->is_directory = (node->flags & 0x7) == VFS_DIRECTORY;
@@ -1145,6 +1140,63 @@ void open_file_manager() {
     load_file_list();
     selected_file = -1;
     file_scroll_offset = 0;
+
+    window_t *win = &windows[id];
+
+    // Create TitanUI Interface
+    VerticalBoxLayout *root = new VerticalBoxLayout();
+    root->width = win->width - 8;
+    root->height = win->height - 40;
+    root->style.backgroundColor = 0xFFFFFFFF;
+
+    // Toolbar
+    HorizontalBoxLayout *toolbar = new HorizontalBoxLayout();
+    toolbar->height = 40;
+    toolbar->width = root->width;
+    toolbar->style.backgroundColor = 0xFFF5F5F5;
+    toolbar->spacing = 10;
+    toolbar->style.padding = 5;
+
+    Button *backBtn = new Button();
+    strcpy(backBtn->text, " < Back");
+    backBtn->width = 80;
+    backBtn->height = 30;
+
+    Button *homeBtn = new Button();
+    strcpy(homeBtn->text, "Home");
+    homeBtn->width = 70;
+    homeBtn->height = 30;
+
+    Label *path = new Label(" Location: /");
+    path->width = 200;
+    path->height = 30;
+    path->color = 0xFF444444;
+
+    toolbar->add_child(backBtn);
+    toolbar->add_child(homeBtn);
+    toolbar->add_child(path);
+
+    root->add_child(toolbar);
+
+    // Separator
+    Separator *sep = new Separator();
+    sep->height = 2;
+    sep->width = root->width;
+    root->add_child(sep);
+
+    // File Grid
+    IconView *files = new IconView();
+    files->width = root->width;
+    files->height = root->height - 42;
+    files->style.backgroundColor = 0xFFFFFFFF;
+
+    for (int i = 0; i < file_count && i < 32; i++) {
+      files->add_icon(file_list[i].name, nullptr);
+    }
+
+    root->add_child(files);
+
+    win->titan_root = root;
   }
 }
 
@@ -1217,22 +1269,110 @@ void draw_system_monitor_content(window_t *win) {
 }
 
 // PHASE 7: APPLICATION LAUNCHER
+extern "C" {
 void launch_app(const char *app_name) {
   if (strcmp(app_name, "File Manager") == 0) {
     open_file_manager();
   } else if (strcmp(app_name, "Terminal") == 0) {
     create_window("Terminal", 100, 100, 600, 400, WINDOW_TYPE_TERMINAL);
-    window_t *term = &windows[window_count - 1];
-    strcpy(term->buffer, "Welcome to ThisOS Terminal\\n> ");
-    term->buffer_len = strlen(term->buffer);
+    terminal_window_id = window_count - 1;
+    focused_window_id = terminal_window_id;
+
+    // Initialize terminal output buffer with shell prompt
+    terminal_output_len = 0;
+    terminal_output_buffer[0] = 0;
+    strcpy(terminal_output_buffer, "=== Retro-OS [Version 1.0.11] ===\nType "
+                                   "HELP for list of 95 commands.\n\n/> ");
+    terminal_output_len = strlen(terminal_output_buffer);
+
+    // Copy to window buffer
+    window_t *term = &windows[terminal_window_id];
+    strcpy(term->buffer, terminal_output_buffer);
+    term->buffer_len = terminal_output_len;
+
+    serial_log("GUI: Terminal connected to init.c shell via TTY");
   } else if (strcmp(app_name, "Notepad") == 0) {
-    create_window("Notepad", 200, 150, 500, 400, WINDOW_TYPE_NOTEPAD);
+    int id = create_window("Notepad", 200, 150, 500, 400, WINDOW_TYPE_NOTEPAD);
+    if (id >= 0) {
+      window_t *win = &windows[id];
+      VerticalBoxLayout *root = new VerticalBoxLayout();
+      root->width = win->width - 8;
+      root->height = win->height - 40;
+      root->style.backgroundColor = 0xFFFFFFFF;
+
+      HorizontalBoxLayout *toolbar = new HorizontalBoxLayout();
+      toolbar->height = 34;
+      toolbar->width = root->width;
+      toolbar->style.backgroundColor = 0xFFF0F0F0;
+      toolbar->spacing = 5;
+      toolbar->style.padding = 2;
+
+      Button *btnSave = new Button();
+      strcpy(btnSave->text, "Save");
+      btnSave->width = 60;
+      btnSave->height = 26;
+      Button *btnLoad = new Button();
+      strcpy(btnLoad->text, "Load");
+      btnLoad->width = 60;
+      btnLoad->height = 26;
+
+      toolbar->add_child(btnSave);
+      toolbar->add_child(btnLoad);
+      root->add_child(toolbar);
+
+      // Separator
+      Separator *sep = new Separator();
+      sep->height = 2;
+      sep->width = root->width;
+      root->add_child(sep);
+
+      // Text Area Placeholder (until TextBox handles buffer)
+      // Using TerminalWidget as a multi-line text display for now, or just a
+      // labeled container
+      TextBox *tb = new TextBox();
+      tb->width = root->width;
+      tb->height = root->height - 38;
+      root->add_child(tb);
+
+      win->titan_root = root;
+    }
   } else if (strcmp(app_name, "System Monitor") == 0) {
-    create_window("System Monitor", 150, 150, 400, 300,
-                  WINDOW_TYPE_SYSTEM_MONITOR);
+    int id = create_window("System Monitor", 150, 150, 420, 320,
+                           WINDOW_TYPE_SYSTEM_MONITOR);
+    if (id >= 0) {
+      window_t *win = &windows[id];
+      VerticalBoxLayout *root = new VerticalBoxLayout();
+      root->width = win->width - 8;
+      root->height = win->height - 40;
+      root->style.backgroundColor = 0xFFF8F8F8;
+      root->spacing = 15;
+      root->style.padding = 15;
+
+      root->add_child(new Label("CPU Usage:"));
+      ProgressBar *cpu = new ProgressBar();
+      cpu->value = 25;
+      cpu->width = 300;
+      cpu->height = 20;
+      cpu->progressColor = 0xFF00E676;
+      root->add_child(cpu);
+
+      root->add_child(new Label("Memory Usage:"));
+      ProgressBar *mem = new ProgressBar();
+      mem->value = 45;
+      mem->width = 300;
+      mem->height = 20;
+      mem->progressColor = 0xFF2979FF;
+      root->add_child(mem);
+
+      root->add_child(new Label("Tasks Running: 12"));
+      root->add_child(new Label("Uptime: 00:04:20"));
+
+      win->titan_root = root;
+    }
   } else if (strcmp(app_name, "Calculator") == 0) {
     create_window("Calculator", 300, 200, 300, 400, WINDOW_TYPE_CALCULATOR);
   }
+}
 }
 
 void save_mouse_bg(int x, int y) {
@@ -1279,11 +1419,92 @@ uint32_t get_pixel(int x, int y) {
 }
 
 void handle_key_press(char c) {
+  if (!ctx)
+    return;
   if (focused_window_id == -1) {
     return;
   }
   window_t *win = &windows[focused_window_id];
 
+  // Handle Alt+F4 to close window (identified by char 255)
+  if (c == (char)255) {
+    serial_log("GUI: Alt+F4 detected. Closing focused window.");
+    close_window(focused_window_id);
+    return;
+  }
+
+  // If Terminal is focused, handle input directly (kernel shell mode)
+  if (win->type == WINDOW_TYPE_TERMINAL) {
+    if (c == '\b' || c == 127) {
+      // Backspace - remove last char from buffer
+      if (win->buffer_len > 0) {
+        // Don't delete past the prompt
+        const char *prompt = "/> ";
+        int prompt_len = strlen(prompt);
+        // Find last prompt position
+        char *last_prompt = 0;
+        for (int i = win->buffer_len - 1; i >= 0; i--) {
+          if (i >= 2 && win->buffer[i - 2] == '/' &&
+              win->buffer[i - 1] == '>' && win->buffer[i] == ' ') {
+            last_prompt = &win->buffer[i - 2];
+            break;
+          }
+        }
+        int prompt_pos = last_prompt ? (last_prompt - win->buffer) + 3 : 0;
+        if (win->buffer_len > prompt_pos) {
+          win->buffer_len--;
+          win->buffer[win->buffer_len] = 0;
+        }
+      }
+    } else if (c == '\n' || c == '\r') {
+      // Enter - execute command
+      // Find the last prompt to get the command
+      char *last_prompt = 0;
+      for (int i = win->buffer_len - 1; i >= 2; i--) {
+        if (win->buffer[i - 2] == '/' && win->buffer[i - 1] == '>' &&
+            win->buffer[i] == ' ') {
+          last_prompt = &win->buffer[i + 1];
+          break;
+        }
+      }
+      if (last_prompt) {
+        // Extract command (up to newline)
+        char cmd[128];
+        int cmd_len = 0;
+        char *p = last_prompt;
+        while (*p && *p != '\n' && cmd_len < 127) {
+          cmd[cmd_len++] = *p++;
+        }
+        cmd[cmd_len] = 0;
+
+        // Add newline to buffer
+        if (win->buffer_len < 1020) {
+          win->buffer[win->buffer_len++] = '\n';
+          win->buffer[win->buffer_len] = 0;
+        }
+
+        // Execute command
+        console_execute(win, cmd);
+
+        // Add new prompt
+        strcat(win->buffer, "/> ");
+        win->buffer_len = strlen(win->buffer);
+      }
+    } else if (win->buffer_len < 1020) {
+      // Normal character - add to buffer
+      win->buffer[win->buffer_len++] = c;
+      win->buffer[win->buffer_len] = 0;
+    }
+
+    // Update shared terminal buffer for consistency
+    strcpy(terminal_output_buffer, win->buffer);
+    terminal_output_len = win->buffer_len;
+
+    draw_desktop();
+    return;
+  }
+
+  // Non-terminal windows: normal handling
   if (c == '\b') {
     if (win->buffer_len > 0) {
       win->buffer_len--;
@@ -1291,39 +1512,13 @@ void handle_key_press(char c) {
       draw_desktop();
     }
   } else if (c == '\n') {
-    if (focused_window_id == terminal_window_id) {
-      int i = win->buffer_len - 1;
-      while (i >= 0 && win->buffer[i] != '\n' && win->buffer[i] != '>')
-        i--;
-
-      char *raw_cmd = win->buffer + i + 1;
-      while (*raw_cmd == ' ')
-        raw_cmd++;
-
-      char cmd_buf[64];
-      int k = 0;
-      while (k < 63 && *raw_cmd != 0 && *raw_cmd != '\n') {
-        cmd_buf[k++] = *raw_cmd++;
-      }
-      cmd_buf[k] = 0;
-
+    if (win->buffer_len < 1023) {
       win->buffer[win->buffer_len++] = '\n';
       win->buffer[win->buffer_len] = 0;
-
-      console_execute(win, cmd_buf);
-
-      strcat(win->buffer, "> ");
-      win->buffer_len = strlen(win->buffer);
-    } else {
-      if (win->buffer_len < 1023) {
-        win->buffer[win->buffer_len++] = '\n';
-        win->buffer[win->buffer_len] = 0;
-      }
     }
     draw_desktop();
   } else if (win->buffer_len < 1023) {
     // Handle Ctrl+S (Simple: Save to SAVED.TXT)
-    // Assuming 'c' is ASCII. Ctrl+S is usually 0x13
     if (c == 0x13) {
       serial_log("GUI: Saving Notepad content...");
       fat16_create_file("SAVED.TXT");
@@ -1337,12 +1532,160 @@ void handle_key_press(char c) {
   }
 }
 
+// Terminal refresh - called when TTY output changes
+void terminal_refresh() {
+  if (terminal_window_id >= 0 && terminal_window_id < window_count) {
+    window_t *win = &windows[terminal_window_id];
+    // Copy terminal buffer to window
+    int len = terminal_output_len;
+    if (len > 1023)
+      len = 1023;
+    memcpy(win->buffer, terminal_output_buffer, len);
+    win->buffer[len] = 0;
+    win->buffer_len = len;
+    // Redraw but minimize flicker
+    // draw_desktop(); // Can cause recursion, skip for now
+  }
+}
+
+// Append output to terminal buffer (called from kernel print)
+void terminal_append_output(const char *str) {
+  while (*str && terminal_output_len < 2000) {
+    terminal_output_buffer[terminal_output_len++] = *str++;
+  }
+  terminal_output_buffer[terminal_output_len] = 0;
+  terminal_refresh();
+}
+
+void open_about_dialog() {
+  int id =
+      create_window("About Retro-OS", 200, 150, 420, 320, WINDOW_TYPE_NORMAL);
+  window_t *win = &windows[id];
+
+  const char *about_gml = "@VerticalBoxLayout {"
+                          "  spacing: 15"
+                          "  width: 400"
+                          "  height: 300"
+                          "  @Label {"
+                          "    text: \"Retro-OS\""
+                          "    color: 0x000000"
+                          "    width: 200"
+                          "    height: 30"
+                          "  }"
+                          "  @Label {"
+                          "    text: \"Hardcore Aesthetic Edition\""
+                          "    color: 0x555555"
+                          "    width: 300"
+                          "    height: 20"
+                          "  }"
+                          "  @Separator {"
+                          "    width: 380"
+                          "    height: 2"
+                          "  }"
+                          "  @Label {"
+                          "    text: \"Components: GML, TitanUI, LibC\""
+                          "    color: 0x222222"
+                          "    width: 350"
+                          "    height: 20"
+                          "  }"
+                          "  @ProgressBar {"
+                          "    value: 100"
+                          "    width: 380"
+                          "    height: 25"
+                          "  }"
+                          "  @Button {"
+                          "    text: \"EXCELLENT\""
+                          "    width: 120"
+                          "    height: 35"
+                          "  }"
+                          "}";
+
+  win->titan_root = (void *)parse_gml(about_gml);
+  draw_desktop();
+}
+
+void open_system_monitor() {
+  int id =
+      create_window("System Monitor", 100, 100, 500, 420, WINDOW_TYPE_NORMAL);
+  window_t *win = &windows[id];
+
+  const char *sysmon_gml =
+      "@VerticalBoxLayout {"
+      "  spacing: 12"
+      "  width: 480"
+      "  height: 400"
+      "  @Label {"
+      "    text: \"CPU Usage (Kernel Time)\""
+      "    height: 20"
+      "  }"
+      "  @ProgressBar {"
+      "    value: 12"
+      "    height: 25"
+      "    progressColor: 0x00AAFF"
+      "  }"
+      "  @Label {"
+      "    text: \"Memory Usage (Physical RAM)\""
+      "    height: 20"
+      "  }"
+      "  @ProgressBar {"
+      "    value: 68"
+      "    height: 25"
+      "    progressColor: 0xFF5500"
+      "  }"
+      "  @Separator {"
+      "    width: 460"
+      "    height: 2"
+      "  }"
+      "  @Label {"
+      "    text: \"Process List (Active)\""
+      "    height: 20"
+      "    color: 0x0000FF"
+      "  }"
+      "  @Label { text: \" PID  Name        Status\" height: 20 color: "
+      "0x444444 }"
+      "  @Label { text: \" 001  Kernel      Running\" height: 18 }"
+      "  @Label { text: \" 042  WindowSrv   Running\" height: 18 }"
+      "  @Label { text: \" 085  IDE Driver  IO Wait\" height: 18 }"
+      "  @Label { text: \" 102  Shell       Idle   \" height: 18 }"
+      "  @Button {"
+      "    text: \"Refresh List\""
+      "    width: 140"
+      "    height: 35"
+      "  }"
+      "}";
+
+  win->titan_root = (void *)parse_gml(sysmon_gml);
+  draw_desktop();
+}
+
+void open_analog_clock() {
+  int id = create_window("Analog Clock", 50, 50, 200, 240, WINDOW_TYPE_NORMAL);
+  window_t *win = &windows[id];
+
+  AnalogClock *clock = new AnalogClock();
+  clock->width = 180;
+  clock->height = 180;
+  win->titan_root = (void *)clock;
+  draw_desktop();
+}
+
 void console_execute(window_t *win, char *cmd) {
   if (strcmp(cmd, "help") == 0) {
-    strcat(win->buffer, "Available commands:\n  help - Show this list\n  cls  "
-                        "- Clear screen\n  time - Show system time\n  ls   - "
-                        "List files\n  df   - Disk usage\n  fm   - Open File "
-                        "Manager\n  calc <exp> - Calculator\n");
+    strcat(win->buffer,
+           "Available commands:\n  help  - Show list\n  cls    - Clear\n"
+           "  time  - System Time\n  ls    - List Files\n  df    - Disk Wiki\n"
+           "  fm    - File Manager\n  calc  - Calculator\n"
+           "  about - Version\n  sysmon- System Monitor\n"
+           "  clock - Analog Clock\n");
+  } else if (strcmp(cmd, "about") == 0) {
+    open_about_dialog();
+    strcat(win->buffer, "Opening About Retro-OS...\n");
+  } else if (strcmp(cmd, "sysmon") == 0) {
+    open_system_monitor();
+    strcat(win->buffer, "Opening System Monitor...\n");
+  } else if (strcmp(cmd, "clock") == 0) {
+    open_analog_clock();
+    strcat(win->buffer, "Opening Analog Clock...\n");
   } else if (strcmp(cmd, "cls") == 0) {
     win->buffer[0] = 0;
     win->buffer_len = 0;
@@ -1365,7 +1708,7 @@ void console_execute(window_t *win, char *cmd) {
       struct dirent *de = readdir_vfs(vfs_root, i);
       if (de) {
         strcat(win->buffer, "  ");
-        strcat(win->buffer, de->name);
+        strcat(win->buffer, de->d_name);
         strcat(win->buffer, "\n");
       } else
         break;
@@ -1421,7 +1764,31 @@ void console_execute(window_t *win, char *cmd) {
     strcat(win->buffer, buf);
     strcat(win->buffer, "\n");
   } else if (strlen(cmd) > 0) {
-    strcat(win->buffer, "Unknown command.\n");
+    char upper_cmd[64];
+    int i = 0;
+    for (; cmd[i] && i < 63; i++) {
+      if (cmd[i] >= 'a' && cmd[i] <= 'z')
+        upper_cmd[i] = cmd[i] - 'a' + 'A';
+      else
+        upper_cmd[i] = cmd[i];
+    }
+    upper_cmd[i] = 0;
+
+    // Try to run it as an ELF file
+    fat16_entry_t entry = fat16_find_file(upper_cmd);
+    if (entry.filename[0] != 0) {
+      extern void create_user_process(const char *name);
+      create_user_process(cmd);
+      char msg[64];
+      strcpy(msg, "Launching ");
+      strcat(msg, cmd);
+      strcat(msg, "...\n");
+      strcat(win->buffer, msg);
+    } else {
+      strcat(win->buffer, "Unknown command: ");
+      strcat(win->buffer, cmd);
+      strcat(win->buffer, "\n");
+    }
   }
   win->buffer_len = strlen(win->buffer);
 }
@@ -1435,14 +1802,14 @@ typedef struct {
 
 notification_t global_notif = {"PIXELCHAT", "New Message from PIXELCHAT", 0, 0};
 
-void add_notification(const char *from, const char *msg) {
+extern "C" void add_notification(const char *from, const char *msg) {
   strcpy(global_notif.from, from);
   strcpy(global_notif.msg, msg);
   global_notif.active = 1;
   draw_desktop();
 }
 
-void draw_notifications() {
+extern "C" void draw_notifications() {
   if (!global_notif.active)
     return;
 
@@ -1468,4 +1835,65 @@ void draw_notifications() {
   draw_rect(nx + 180, ny + nh - 30, 4, 24, PIXEL_BLACK);
 
   draw_string(nx + 65, ny + nh - 25, "DISMISS", PIXEL_BLACK);
+}
+
+// IPC Handler for WindowServer
+extern "C" void ws_ipc_handler() {
+  serial_log("WS_IPC: Handler started.");
+  int server_sock = sys_socket(AF_UNIX, SOCK_STREAM, 0);
+  if (server_sock < 0) {
+    serial_log("WS_IPC: Failed to create socket.");
+    return;
+  }
+
+  if (sys_bind(server_sock, "/tmp/ws.sock") < 0) {
+    serial_log("WS_IPC: Failed to bind socket.");
+    // Continue anyway or handle error
+  }
+  serial_log("WS_IPC: Socket bound to /tmp/ws.sock");
+
+  while (true) {
+    int client_sock = sys_accept(server_sock);
+    if (client_sock < 0)
+      continue;
+
+    serial_log("WS_IPC: Accepted connection.");
+
+    while (true) {
+      gfx_msg_t msg;
+      int n = read_vfs(current_process->fd_table[client_sock], 0, sizeof(msg),
+                       (uint8_t *)&msg);
+      if (n <= 0)
+        break;
+
+      if (msg.type == MSG_GFX_CREATE_WINDOW) {
+        serial_log("WS_IPC: MSG_GFX_CREATE_WINDOW");
+        int win_id = create_window(msg.data.create.title, 100, 100,
+                                   msg.data.create.width,
+                                   msg.data.create.height, WINDOW_TYPE_NORMAL);
+        if (win_id >= 0) {
+          window_t *win = &windows[win_id];
+          uint32_t fb_size = win->width * win->height * 4;
+          // Use IPC_PRIVATE (0) to always create a NEW unique segment
+          int shmid = sys_shmget(IPC_PRIVATE, fb_size, 0);
+          if (shmid >= 0) {
+            win->shm_id = shmid;
+            win->framebuffer = (uint32_t *)sys_shmat(shmid);
+
+            // Send response
+            gfx_msg_t resp;
+            resp.type = MSG_GFX_WINDOW_CREATED;
+            resp.data.created.window_id = win_id;
+            resp.data.created.shm_id = shmid;
+            write_vfs(current_process->fd_table[client_sock], 0, sizeof(resp),
+                      (uint8_t *)&resp);
+          }
+        }
+      } else if (msg.type == MSG_GFX_INVALIDATE_RECT) {
+        // Redraw window request
+        draw_desktop();
+      }
+    }
+    // TODO: close client_sock
+  }
 }
