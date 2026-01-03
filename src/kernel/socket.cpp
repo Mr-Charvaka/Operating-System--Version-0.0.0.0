@@ -179,7 +179,8 @@ int sys_bind(int sockfd, const char *path) {
     return -1;
 
   socket_t *sock = (socket_t *)node->impl;
-  strcpy(sock->bind_path, path);
+  strncpy(sock->bind_path, path, 127);
+  sock->bind_path[127] = 0;
   sock->state = SOCKET_BOUND;
   serial_log("SOCKET: sys_bind bound socket to path:");
   serial_log(sock->bind_path);
@@ -204,10 +205,23 @@ int sys_connect(int sockfd, const char *path) {
                    node->flags);
     return -1;
   }
-  socket_t *sock = (socket_t *)node->impl;
+  serial_log_hex("SOCKET: Global sockets array at ", (uint32_t)sockets);
+  for (int i = 0; i < MAX_SOCKETS; i++) {
+    if (sockets[i]) {
+      serial_log_hex("SOCKET: i=", i);
+      serial_log_hex("  State: ", sockets[i]->state);
+      serial_log("  Path: ");
+      serial_log(sockets[i]->bind_path);
+    }
+  }
 
+  char kpath[128];
+  strncpy(kpath, path, 127);
+  kpath[127] = 0;
+
+  socket_t *sock = (socket_t *)node->impl;
   serial_log("SOCKET: sys_connect looking for path:");
-  serial_log(path);
+  serial_log(kpath);
 
   // Find the bound socket
   socket_t *server = 0;
@@ -215,7 +229,7 @@ int sys_connect(int sockfd, const char *path) {
     if (sockets[i] && sockets[i]->state == SOCKET_BOUND) {
       serial_log("SOCKET: Checking bound socket:");
       serial_log(sockets[i]->bind_path);
-      if (strcmp(sockets[i]->bind_path, path) == 0) {
+      if (strcmp(sockets[i]->bind_path, kpath) == 0) {
         server = sockets[i];
         break;
       }
@@ -307,4 +321,341 @@ int sys_accept(int sockfd) {
   }
 
   return -1;
+}
+
+// ============================================================================
+// Extended Socket Functions for POSIX Compliance
+// ============================================================================
+
+// Listen for connections
+int sys_listen(int sockfd, int backlog) {
+  if (sockfd < 0 || sockfd >= MAX_PROCESS_FILES)
+    return -1;
+  vfs_node_t *node = current_process->fd_table[sockfd];
+  if (!node || node->flags != VFS_SOCKET)
+    return -1;
+  socket_t *sock = (socket_t *)(uintptr_t)node->impl;
+
+  if (sock->state != SOCKET_BOUND)
+    return -1; // Must be bound first
+
+  sock->state = SOCKET_LISTENING;
+  sock->max_backlog = (backlog > 0) ? backlog : 5;
+  if (sock->max_backlog > MAX_BACKLOG)
+    sock->max_backlog = MAX_BACKLOG;
+
+  serial_log("SOCKET: Now listening");
+  return 0;
+}
+
+// Send data (same as write but with flags)
+ssize_t sys_send(int sockfd, const void *buf, size_t len, int flags) {
+  (void)flags; // Flags not fully implemented
+
+  if (sockfd < 0 || sockfd >= MAX_PROCESS_FILES || !buf)
+    return -1;
+  vfs_node_t *node = current_process->fd_table[sockfd];
+  if (!node || node->flags != VFS_SOCKET)
+    return -1;
+
+  return socket_write(node, 0, len, (uint8_t *)buf);
+}
+
+// Receive data (same as read but with flags)
+ssize_t sys_recv(int sockfd, void *buf, size_t len, int flags) {
+  (void)flags; // Flags not fully implemented
+
+  if (sockfd < 0 || sockfd >= MAX_PROCESS_FILES || !buf)
+    return -1;
+  vfs_node_t *node = current_process->fd_table[sockfd];
+  if (!node || node->flags != VFS_SOCKET)
+    return -1;
+
+  return socket_read(node, 0, len, (uint8_t *)buf);
+}
+
+// Send datagram (for UDP-style sockets)
+ssize_t sys_sendto(int sockfd, const void *buf, size_t len, int flags,
+                   const void *dest_addr, uint32_t addrlen) {
+  (void)dest_addr;
+  (void)addrlen;
+  // For UNIX domain sockets, sendto works like send
+  return sys_send(sockfd, buf, len, flags);
+}
+
+// Receive datagram
+ssize_t sys_recvfrom(int sockfd, void *buf, size_t len, int flags,
+                     void *src_addr, uint32_t *addrlen) {
+  (void)src_addr;
+  (void)addrlen;
+  // For UNIX domain sockets, recvfrom works like recv
+  return sys_recv(sockfd, buf, len, flags);
+}
+
+// Get local socket name
+int sys_getsockname(int sockfd, void *addr, uint32_t *addrlen) {
+  if (sockfd < 0 || sockfd >= MAX_PROCESS_FILES)
+    return -1;
+  vfs_node_t *node = current_process->fd_table[sockfd];
+  if (!node || node->flags != VFS_SOCKET)
+    return -1;
+  socket_t *sock = (socket_t *)(uintptr_t)node->impl;
+
+  if (!addr || !addrlen)
+    return -1;
+
+  // Return socket address (simplified - just path for UNIX sockets)
+  struct sockaddr_un {
+    uint16_t sun_family;
+    char sun_path[108];
+  } *un_addr = (struct sockaddr_un *)addr;
+
+  un_addr->sun_family = AF_UNIX;
+  strncpy(un_addr->sun_path, sock->path, 107);
+  un_addr->sun_path[107] = 0;
+
+  *addrlen = sizeof(struct sockaddr_un);
+  return 0;
+}
+
+// Get peer socket name
+int sys_getpeername(int sockfd, void *addr, uint32_t *addrlen) {
+  if (sockfd < 0 || sockfd >= MAX_PROCESS_FILES)
+    return -1;
+  vfs_node_t *node = current_process->fd_table[sockfd];
+  if (!node || node->flags != VFS_SOCKET)
+    return -1;
+  socket_t *sock = (socket_t *)(uintptr_t)node->impl;
+
+  if (!sock->peer || sock->state != SOCKET_CONNECTED)
+    return -1; // Not connected
+
+  if (!addr || !addrlen)
+    return -1;
+
+  // Return peer address
+  struct sockaddr_un {
+    uint16_t sun_family;
+    char sun_path[108];
+  } *un_addr = (struct sockaddr_un *)addr;
+
+  un_addr->sun_family = AF_UNIX;
+  strncpy(un_addr->sun_path, sock->peer->path, 107);
+  un_addr->sun_path[107] = 0;
+
+  *addrlen = sizeof(struct sockaddr_un);
+  return 0;
+}
+
+// Socket option flags
+#define SO_DEBUG 1
+#define SO_REUSEADDR 2
+#define SO_KEEPALIVE 9
+#define SO_BROADCAST 6
+#define SO_LINGER 13
+#define SO_RCVBUF 8
+#define SO_SNDBUF 7
+#define SO_RCVTIMEO 20
+#define SO_SNDTIMEO 21
+#define SO_ERROR 4
+#define SO_TYPE 3
+
+#define SOL_SOCKET 1
+
+// Set socket options
+int sys_setsockopt(int sockfd, int level, int optname, const void *optval,
+                   uint32_t optlen) {
+  (void)level;
+  (void)optval;
+  (void)optlen;
+
+  if (sockfd < 0 || sockfd >= MAX_PROCESS_FILES)
+    return -1;
+  vfs_node_t *node = current_process->fd_table[sockfd];
+  if (!node || node->flags != VFS_SOCKET)
+    return -1;
+
+  // Socket options are not fully implemented
+  // Just return success for common options
+  switch (optname) {
+  case SO_REUSEADDR:
+  case SO_KEEPALIVE:
+  case SO_BROADCAST:
+  case SO_LINGER:
+  case SO_RCVBUF:
+  case SO_SNDBUF:
+  case SO_RCVTIMEO:
+  case SO_SNDTIMEO:
+    return 0;
+  default:
+    return -1;
+  }
+}
+
+// Get socket options
+int sys_getsockopt(int sockfd, int level, int optname, void *optval,
+                   uint32_t *optlen) {
+  (void)level;
+
+  if (sockfd < 0 || sockfd >= MAX_PROCESS_FILES)
+    return -1;
+  vfs_node_t *node = current_process->fd_table[sockfd];
+  if (!node || node->flags != VFS_SOCKET)
+    return -1;
+  socket_t *sock = (socket_t *)(uintptr_t)node->impl;
+
+  if (!optval || !optlen)
+    return -1;
+
+  switch (optname) {
+  case SO_ERROR: {
+    if (*optlen >= sizeof(int)) {
+      *(int *)optval = 0; // No pending error
+      *optlen = sizeof(int);
+    }
+    return 0;
+  }
+  case SO_TYPE: {
+    if (*optlen >= sizeof(int)) {
+      *(int *)optval = sock->type;
+      *optlen = sizeof(int);
+    }
+    return 0;
+  }
+  case SO_RCVBUF:
+  case SO_SNDBUF: {
+    if (*optlen >= sizeof(int)) {
+      *(int *)optval = 4096; // Our buffer size
+      *optlen = sizeof(int);
+    }
+    return 0;
+  }
+  default:
+    return -1;
+  }
+}
+
+// Shutdown socket
+#define SHUT_RD 0
+#define SHUT_WR 1
+#define SHUT_RDWR 2
+
+int sys_shutdown(int sockfd, int how) {
+  if (sockfd < 0 || sockfd >= MAX_PROCESS_FILES)
+    return -1;
+  vfs_node_t *node = current_process->fd_table[sockfd];
+  if (!node || node->flags != VFS_SOCKET)
+    return -1;
+  socket_t *sock = (socket_t *)(uintptr_t)node->impl;
+
+  switch (how) {
+  case SHUT_RD:
+    // Disable reading - mark buffer as full
+    sock->head = sock->tail;
+    break;
+  case SHUT_WR:
+    // Disable writing - disconnect peer awareness
+    if (sock->peer)
+      sock->peer->peer = 0;
+    break;
+  case SHUT_RDWR:
+    sock->head = sock->tail;
+    if (sock->peer)
+      sock->peer->peer = 0;
+    break;
+  default:
+    return -1;
+  }
+
+  return 0;
+}
+
+// Pair of connected sockets (for IPC)
+int sys_socketpair(int domain, int type, int protocol, int sv[2]) {
+  (void)domain;
+  (void)type;
+  (void)protocol;
+
+  if (!sv)
+    return -1;
+
+  // Create two connected sockets
+  socket_t *sock1 = alloc_socket();
+  socket_t *sock2 = alloc_socket();
+
+  if (!sock1 || !sock2) {
+    if (sock1)
+      sockets[sock1->id] = 0;
+    if (sock2)
+      sockets[sock2->id] = 0;
+    return -1;
+  }
+
+  sock1->state = SOCKET_CONNECTED;
+  sock2->state = SOCKET_CONNECTED;
+  sock1->peer = sock2;
+  sock2->peer = sock1;
+
+  // Create VFS nodes
+  vfs_node_t *node1 = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
+  vfs_node_t *node2 = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
+
+  if (!node1 || !node2) {
+    if (node1)
+      kfree(node1);
+    if (node2)
+      kfree(node2);
+    sockets[sock1->id] = 0;
+    sockets[sock2->id] = 0;
+    return -1;
+  }
+
+  memset(node1, 0, sizeof(vfs_node_t));
+  memset(node2, 0, sizeof(vfs_node_t));
+
+  strcpy(node1->name, "socketpair");
+  strcpy(node2->name, "socketpair");
+  node1->impl = (uint32_t)(uintptr_t)sock1;
+  node2->impl = (uint32_t)(uintptr_t)sock2;
+  node1->read = socket_read;
+  node2->read = socket_read;
+  node1->write = socket_write;
+  node2->write = socket_write;
+  node1->close = socket_close;
+  node2->close = socket_close;
+  node1->flags = VFS_SOCKET;
+  node2->flags = VFS_SOCKET;
+  node1->ref_count = 1;
+  node2->ref_count = 1;
+
+  // Find two free file descriptors
+  int fd1 = -1, fd2 = -1;
+  for (int i = 0; i < MAX_PROCESS_FILES && (fd1 < 0 || fd2 < 0); i++) {
+    if (!current_process->fd_table[i]) {
+      if (fd1 < 0) {
+        fd1 = i;
+        current_process->fd_table[i] = node1;
+      } else {
+        fd2 = i;
+        current_process->fd_table[i] = node2;
+      }
+    }
+  }
+
+  if (fd1 < 0 || fd2 < 0) {
+    // Cleanup on failure
+    if (fd1 >= 0)
+      current_process->fd_table[fd1] = 0;
+    kfree(node1);
+    kfree(node2);
+    sockets[sock1->id] = 0;
+    sockets[sock2->id] = 0;
+    return -1;
+  }
+
+  sv[0] = fd1;
+  sv[1] = fd2;
+
+  serial_log("SOCKET: Created socket pair");
+  return 0;
 }
