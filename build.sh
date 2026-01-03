@@ -9,21 +9,31 @@ find apps -name "*.o" -type f -delete
 rm -f os.img
 
 # Compile Apps
-echo "Compiling apps..."
-gcc -m32 -ffreestanding -c apps/hello.c -o apps/hello.o
-ld -m elf_i386 -T apps/linker.ld -o apps/hello.elf apps/hello.o
+echo "Compiling apps (C++)..."
 
-gcc -m32 -ffreestanding -c apps/init.c -o apps/init.o
-ld -m elf_i386 -T apps/linker.ld -o apps/init.elf apps/init.o
+# Function to build an app
+build_app() {
+    local name=$1
+    echo "  Building apps/$name.cpp..."
+    g++ -m32 -ffreestanding -fno-rtti -fno-exceptions -I apps/ -I src/include -c apps/$name.cpp -o apps/$name.o
+    ld -m elf_i386 -T apps/linker.ld -o apps/$name.elf apps/$name.o
+}
 
-gcc -m32 -ffreestanding -c apps/calc.c -o apps/calc.o
-ld -m elf_i386 -T apps/linker.ld -o apps/calc.elf apps/calc.o
+build_app "hello"
+build_app "init"
+build_app "calc"
+build_app "df"
+build_app "fm"
+build_app "demo_ipc"
+g++ -m32 -ffreestanding -fno-rtti -fno-exceptions -I apps/ -I src/include -c apps/posix_impl.cpp -o apps/posix_impl.o
+echo "  Building apps/posix_test.cpp..."
+g++ -m32 -ffreestanding -fno-rtti -fno-exceptions -I apps/ -I src/include -c apps/posix_test.cpp -o apps/posix_test.o
+ld -m elf_i386 -T apps/linker.ld -o apps/posix_test.elf apps/posix_test.o apps/posix_impl.o
 
-gcc -m32 -ffreestanding -c apps/df.c -o apps/df.o
-ld -m elf_i386 -T apps/linker.ld -o apps/df.elf apps/df.o
+echo "  Building apps/posix_suite.cpp..."
+g++ -m32 -ffreestanding -fno-rtti -fno-exceptions -I apps/ -I src/include -c apps/posix_suite.cpp -o apps/posix_suite.o
+ld -m elf_i386 -T apps/linker.ld -o apps/posix_suite.elf apps/posix_suite.o apps/posix_impl.o
 
-gcc -m32 -ffreestanding -c apps/fm.c -o apps/fm.o
-ld -m elf_i386 -T apps/linker.ld -o apps/fm.elf apps/fm.o
 
 # Compile Bootloader
 echo "Compiling boot.asm..."
@@ -48,7 +58,7 @@ echo "Compiling Sources..."
 find src -name "*.cpp" | while read -r file; do
     echo "  Compiling $file..."
     outfile="${file%.cpp}.o"
-    g++ -ffreestanding -m32 -fno-pie -fno-stack-protector -fno-rtti -fno-exceptions -std=c++20 -g -I src/include -c "$file" -o "$outfile"
+    g++ -ffreestanding -m32 -fno-pie -fstack-protector-strong -Os -fno-rtti -fno-exceptions -std=c++20 -g -I src/include -c "$file" -o "$outfile"
 done
 
 # Link

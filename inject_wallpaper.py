@@ -109,5 +109,20 @@ def inject():
             sec, next_clust = inject_file(f, "FM.ELF", "apps/fm.elf", current_cluster)
             current_cluster = next_clust
 
+        # Inject Demo IPC ELF
+        if os.path.exists("apps/demo_ipc.elf"):
+            sec, next_clust = inject_file(f, "DEMO_IPC.ELF", "apps/demo_ipc.elf", current_cluster)
+            current_cluster = next_clust
+
+        # Inject POSIX Test ELF
+        if os.path.exists("apps/posix_test.elf"):
+            sec, next_clust = inject_file(f, "POSIX_T.ELF", "apps/posix_test.elf", current_cluster)
+            current_cluster = next_clust
+
+        # Inject POSIX Suite ELF
+        if os.path.exists("apps/posix_suite.elf"):
+            sec, next_clust = inject_file(f, "POSIX_SU.ELF", "apps/posix_suite.elf", current_cluster)
+            current_cluster = next_clust
+
 if __name__ == "__main__":
     inject()
