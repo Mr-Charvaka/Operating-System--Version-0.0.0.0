@@ -16,6 +16,10 @@ void pmm_init(uint32_t mem_size, uint32_t *bitmap);
 // Returns physical address, or 0 if OOM
 void *pmm_alloc_block();
 
+// Allocate contiguous 4KB blocks
+void *pmm_alloc_contiguous_blocks(uint32_t count);
+void pmm_free_contiguous_blocks(void *p, uint32_t count);
+
 // Free a 4KB block
 void pmm_free_block(void *p);
 

@@ -1,15 +1,15 @@
 #ifndef HEAP_H
 #define HEAP_H
 
-#include "../include/types.h"
+#include "buddy.h"
 
 // Define a header structure for our heap blocks
 typedef struct header {
   struct header *next; // Next block
   struct header *prev; // Previous block
-  uint32_t size;       // Size of data (excluding header)
+  uint32_t size;       // Size of data (including header)
   uint8_t allocated;   // 1 if allocated, 0 if free
-  uint8_t magic;       // verification bytes
+  uint32_t magic;      // verification bytes (Canary)
 } header_t;
 
 // Define a heap structure
@@ -20,7 +20,12 @@ typedef struct {
   uint8_t supervisor;
   uint8_t readonly;
   header_t *first_block;
+  buddy_t buddy;
 } kheap_t;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Initialize the kernel heap
 // generic implementation of malloc/free
@@ -32,5 +37,9 @@ void kfree(void *p);
 // Wrappers
 void *malloc(uint32_t size);
 void free(void *p);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

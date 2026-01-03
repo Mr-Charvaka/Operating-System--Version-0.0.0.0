@@ -44,15 +44,8 @@ void pmm_init(uint32_t mem_size, uint32_t *bitmap) {
   pmm_mem_size = mem_size;
   pmm_bitmap = bitmap;
   pmm_max_blocks = (mem_size / PMM_BLOCK_SIZE);
-  pmm_used_blocks =
-      pmm_max_blocks; // Initially mark all as used, then free specific regions
+  pmm_used_blocks = pmm_max_blocks; // Initially mark all as used
 
-  // By default, assume all memory is "used" or "reserved" until we explicitly
-  // free available regions But for simplicity in this OS, we initially memset
-  // to 0 (all free) then mark kernel used. However, safest involves calculating
-  // size.
-
-  // Size of bitmap in bytes = max_blocks / 8
   uint32_t bitmap_size = pmm_max_blocks / 8;
   memset((uint8_t *)pmm_bitmap, 0, bitmap_size); // Clear bitmap (0 = free)
   pmm_used_blocks = 0;
@@ -112,6 +105,36 @@ void *pmm_alloc_block() {
   return (void *)addr;
 }
 
+void *pmm_alloc_contiguous_blocks(uint32_t count) {
+  if (count == 0)
+    return 0;
+  if (pmm_get_free_block_count() < count)
+    return 0;
+
+  uint32_t consecutive = 0;
+  int start_frame = -1;
+
+  for (uint32_t i = 0; i < pmm_max_blocks; i++) {
+    if (!mmap_test(i)) {
+      if (consecutive == 0)
+        start_frame = i;
+      consecutive++;
+      if (consecutive == count) {
+        // Found it
+        for (uint32_t k = 0; k < count; k++) {
+          mmap_set(start_frame + k);
+        }
+        pmm_used_blocks += count;
+        return (void *)(start_frame * PMM_BLOCK_SIZE);
+      }
+    } else {
+      consecutive = 0;
+      start_frame = -1;
+    }
+  }
+  return 0;
+}
+
 void pmm_free_block(void *p) {
   uint32_t addr = (uint32_t)p;
   int frame = addr / PMM_BLOCK_SIZE;
@@ -119,6 +142,18 @@ void pmm_free_block(void *p) {
   if (mmap_test(frame)) {
     mmap_unset(frame);
     pmm_used_blocks--;
+  }
+}
+
+void pmm_free_contiguous_blocks(void *p, uint32_t count) {
+  uint32_t addr = (uint32_t)p;
+  int frame = addr / PMM_BLOCK_SIZE;
+
+  for (uint32_t i = 0; i < count; i++) {
+    if (mmap_test(frame + i)) {
+      mmap_unset(frame + i);
+      pmm_used_blocks--;
+    }
   }
 }
 
