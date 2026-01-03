@@ -24,7 +24,7 @@
     bsFilSysType            db "FAT16   "
 
 start:
-KERNEL_OFFSET equ 0xC000 ; Match linker.ld address (Low Memory)
+KERNEL_OFFSET equ 0x8000 ; Load at 32KB
 
     mov [BOOT_DRIVE], dl ; BIOS stores our boot drive in DL
 
@@ -32,7 +32,7 @@ KERNEL_OFFSET equ 0xC000 ; Match linker.ld address (Low Memory)
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov bp, 0x9000
+    mov bp, 0x7C00 ; Stack grows down from bootloader start (safe from kernel overwrite)
     mov sp, bp
 
     mov bx, MSG_REAL_MODE
@@ -64,13 +64,13 @@ load_kernel:
     mov bx, MSG_LOAD_KERNEL
     call print_string
 
-    ; Set ES:BX to load to KERNEL_OFFSET (0xC000)
-    ; 0x0C00:0x0000 = 0xC000
-    mov ax, 0x0C00
+    ; Set ES:BX to load to KERNEL_OFFSET (0x8000)
+    ; 0x800:0x0000 = 0x8000
+    mov ax, 0x800
     mov es, ax
     xor bx, bx
 
-    mov cx, 600  ; Read 600 sectors (300KB) - enough for kernel
+    mov cx, 1300  ; Read 1300 sectors (650KB) - accommodate larger kernel
     mov byte [ABS_S], 2 ; Start at sector 2
     mov byte [ABS_H], 0
     mov byte [ABS_C], 0
